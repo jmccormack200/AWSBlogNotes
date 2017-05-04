@@ -88,7 +88,7 @@ from boto3.dynamodb.conditions import Key, Attr
 JSON Format:
     "userId":"JohnM",
     "displayName":"John Mack",
-    "combination":"[1 2 3 4]"
+    "combination":"[1,2,3,4]"
 """
 validDigits = [1, 2, 3, 4, 5, 6]
 
@@ -99,6 +99,7 @@ def lambda_handler(event, context):
 
     userId = event['userId']
     combination = event['combination']
+    combination = json.loads(combination)
 
     queryTable = table.query(KeyConditionExpression=Key('UserId').eq(userId))
 
@@ -127,10 +128,9 @@ def lambda_handler(event, context):
     output["response"] = "success"
     return output
 
-def validateCombination(combinationString):
+def validateCombination(combination):
     try:
-        combinationParse = combinationString.split()
-        for digit in combinationParse:
+        for digit in combination:
             if int(digit) not in validDigits:
                 print digit
                 return False
@@ -180,6 +180,7 @@ We initialize an empty dictionary to store our output. These lambda functions wi
 ```Python
 userId = event['userId']
 combination = event['combination']
+combination = json.loads(combination)
 ```
 
 `event` is one of the parameters passed into the lambda function. This gives us access to a dictionary of the JSON data passed into the lambda function. We pull out the `userId` and the `combination` from the event and store them in the corresponding variables.
@@ -199,10 +200,9 @@ if (not validateCombination(combination)):
 Next we run a query against our table in DynamoDB to see if the `userId` exists in the database already. We simply check the `Count` of items returned from the query table to see if its anything other than 0 and return a response if there is an error. Next we check to see if the combination is valid and return an error message if its not. Our validation is pretty simple for this project as we were operating in a controlled environment. Be sure to sanitize all your inputs if you were implementing this for real. The validation function is shown below.
 
 ```Python
-def validateCombination(combinationString):
+def validateCombination(combination):
   try:
-      combinationParse = combinationString.split()
-      for digit in combinationParse:
+      for digit in combination:
           if int(digit) not in validDigits:
               print digit
               return False
@@ -248,6 +248,46 @@ In the window that pops up type in:
 {
     "userId":"JohnM",
     "displayName":"John Mack",
-    "combination":"[1 2 3 4]"
+    "combination":"[1,2,3,4]"
 }
 ```
+
+Now click "Save and Test" and at the bottom you should see:
+
+```Javascript
+{
+  "response": "success"
+}
+```
+
+If you run the test again you'll see:
+
+```Javascript
+{
+  "response": "USER_EXISTS"
+}
+```
+
+Because we already created the user. Great! We have our first Lambda expression setup. We need to make a few more, but first lets go ahead and make our first API Endpoint and connect it to this lambda function.
+
+## vi. API Gateway
+
+Go back to the console and then switch over to Amazon "API Gateway". API Gateway will let us open up our Lambdas to the outside world. A word of warning, creating an api is free but keeping it deployed will rack up a bill if you're not still on your 1 year free tier. Once you're on the API Gateway page, go ahead and click the blue "Create API" button.
+
+![Gateway0](gateway0.png)
+
+Then just name your API and click "Create API."
+
+![Gateway1](gateway1.png)
+
+There are two main sections to an api gateway, "Resources" and "Methods." Resources are essentially the the path to the function. A method is the function itself and what we will attach the lambda function to. A Resource can have multiple methods (such as GET and POST) associated with it as well as multiple sub-resources. To begin, we'll make a resource first. Click "Actions" then "Create Resources."
+
+![Gateway2](gateway2.png)
+
+Then add a resource name. The resource path will be autopopulated based on the resource name but you can also feel free to edit it. When you're done, click create resource.
+
+![Gateway3](gateway3.png)
+
+Now we can see the resource on the main apigateway page under the route resource.
+
+![Gateway4](gateway4.png)
