@@ -116,11 +116,14 @@ def lambda_handler(event, context):
     else:
         displayName = userId
 
+    combinationLength = len(combination)
+
     response = table.put_item(
        Item={
             'UserId': userId,
             'DisplayName': displayName,
             'Combination': combination,
+            'CombinationLength': combinationLength
         }
     )
 
@@ -137,6 +140,7 @@ def validateCombination(combination):
         return True
     except:
         return False
+
 ```
 
 Scroll down and select "Choose and existing role" and set the existing role to the one we created earlier.
@@ -201,14 +205,14 @@ Next we run a query against our table in DynamoDB to see if the `userId` exists 
 
 ```Python
 def validateCombination(combination):
-  try:
-      for digit in combination:
-          if int(digit) not in validDigits:
-              print digit
-              return False
-      return True
-  except:
-      return False
+    try:
+        for digit in combination:
+            if int(digit) not in validDigits:
+                print digit
+                return False
+        return True
+    except:
+        return False
 ```
 
 We allow for non-unique display names in addition to the UserId. The display name is optional so it is replaced with the userId if its empty.
@@ -223,11 +227,14 @@ else:
 Finally we actually write the data to the data table and output a success response.
 
 ```Python
+combinationLength = len(combination)
+
 response = table.put_item(
    Item={
         'UserId': userId,
         'DisplayName': displayName,
         'Combination': combination,
+        'combinationLength': combinationLength
     }
 )
 
@@ -291,3 +298,291 @@ Then add a resource name. The resource path will be autopopulated based on the r
 Now we can see the resource on the main apigateway page under the route resource.
 
 ![Gateway4](gateway4.png)
+
+Now that we have the resource we need to add a method. First click on the resource, then "Action", and "Create Method". In the drop down menu that appears select "POST" and then click the checkmark to create.
+
+![Gateway5](gateway5.png)
+
+Then set the integration type to Lambda, select the AWS region you created your lambda in, and then type the name of the lambda. After that click "Save." You may get a notice that you're giving permission to the gateway to access the lambda resource, just click ok.
+
+![Gateway6](gateway6.png)
+
+You should now see a screen that show's a flowchart of the gateway's connection to the lambda.
+
+![Gateway7](gateway7.png)
+
+Click on the word "Test" and then in "Request Body" fill it out the exact same was as we tested before (with a different username).
+
+```Javascript
+{
+    "userId":"JohnM2",
+    "displayName":"John Mack",
+    "combination":"[1,2,3,4]"
+}
+```
+
+Then click "Test" and you should see the output of the function along with the corresponding "Log" output.
+
+![Gateway8](gateway8.png)
+
+At this point the API is not reachable from outside the AWS testing environment. If you want to skip to the end and see how we deploy the api you can skip to ##TODO ADD SECTION NUMBER.## For now let's create a few more endpoints. These endpoints will let us see some other features we can have use.
+
+## vii. User list
+
+Ok so let's create another Lambda called "FetchUsers." This will be used to create a screen that let's the user choose who's lock they will try to pick. It will need to return the Usernames and combination lengths of everyone in the database. Follow the same method as before using the code below.
+
+```Python
+
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+def lambda_handler(event, context):
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('PickPocketBlog')
+
+    query = table.scan(AttributesToGet=[
+        'UserId', 'CombinationLength'
+    ])
+
+    query = query['Items']
+
+    return {
+        'result': query
+    }
+```
+
+This is a pretty small function but let's step through it. Again we import the json and boto3 library and define a lambda handler function.
+
+```Python
+
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+def lambda_handler(event, context):
+```
+
+Next we grab a reference to the Table we created earlier.
+
+```Python
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table('PickPocketBlog')
+```
+
+Then we scan the table and get a list of UserId's and CombinationLength's
+
+```Python
+query = table.scan(AttributesToGet=[
+    'UserId', 'CombinationLength'
+])
+```
+The information we are looking for is contained in `query` as a dictionary with the key `Items`.
+
+```Python
+query = query['Items']
+
+final we return the query to the user.
+
+return {
+    'result': query
+}
+```
+
+Ok so once the lambda is made you can test this by providing an empty json string. You should see a result similar to:
+
+```Javascript
+{
+  "result": [
+    {
+      "UserId": "JohnM",
+      "CombinationLength": 4
+    },
+  ]
+}
+```
+
+Ok so let's jump back over to the API Gateway. We could create another new resource and method for this Lambda, but let's actually delete the old `create-user` and rename it to just `user`. Now we can add both the `CreateUser` and `FetchUsers` Lambdas to the same Resource. Create the first method the same was as last time, then simply add another as a "GET" method on the same resource.
+
+![Gateway9](gateway9.png)
+
+Now this resource path will hit a different lambda depending on whether the client sends a get or a post request. Let's do one more lambda to see one last feature of API Gateway before we deploy.
+
+## viii. Pick Lock
+
+Here's the next Lambda function. We'll discuss it again afterwards.
+
+```Python
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+def lambda_handler(event, context):
+
+    output = {}
+    print(event)
+    userToPick = event['params']['username']
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('PickPocketBlog')
+
+    query = table.query(KeyConditionExpression=Key('UserId').eq(userToPick))
+
+    if (query['Count'] == 0):
+        output['error'] = 'User Not Found'
+        return output
+
+    answer = query['Items'][0]['Combination']
+
+    output['answerList'] = answer
+
+    guess = event['body']['guess']
+    guess = json.loads(guess)
+
+    result = checkAnswer(guess, answer)
+
+    return {
+        'result': result
+    }
+
+def checkAnswer(guess, answer):
+    output = {}
+    correct = 0
+    close = 0
+    if (len(guess) < len(answer)):
+        output['error'] = "Guess has too few digits"
+        return output
+    if (len(guess) > len(answer)):
+        output['error'] = "Guess has too many digits"
+        return output
+
+    for digit in range(0, len(answer)):
+            if (guess[digit] == answer[digit]):
+                    answer[digit] = "x"
+                    guess[digit] = "x"
+                    correct += 1
+    # Check Number Close
+    for digit in range(0, len(answer)):
+            if (guess[digit] != "x" and guess[digit] in answer):
+                    answer[answer.index(guess[digit])] = "x"
+                    close += 1
+
+    output["correct"] = correct
+    output["close"] = close
+    return output
+```
+
+```Python
+import json
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+def lambda_handler(event, context):
+```
+
+Same as usual, we import json and boto3.
+
+```Python
+    print(event)
+    userToPick = event['params']['username']
+
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('PickPocketBlog')
+```
+
+We take in the `username` of the `userToPick` from "params", we'll see why later. Next we again get a resource pointing to our table.
+
+
+```Python
+query = table.query(KeyConditionExpression=Key('UserId').eq(userToPick))
+
+if (query['Count'] == 0):
+    output['error'] = 'User Not Found'
+    return output
+```
+
+We check to make sure the `UserID` exists in the table and return an error if we can't find it.
+
+```Python
+answer = query['Items'][0]['Combination']
+
+guess = event['body']['guess']
+guess = json.loads(guess)
+
+result = checkAnswer(guess, answer)
+
+return {
+    'result': result
+}
+```
+
+We get the correct answer from the Table, and the `Guess` from the body of the JSON event (Again we'll see why later). We then compare the guess to the answer. The algorithm for computing the guess isn't important to seeing how the lambda works but you're welcome to look through it if you'd like.
+
+Ok so let's test that with the following JSON:
+
+```Javascript
+{
+  "body":{
+    "guess":"[1,3,4,4]"
+  },
+  "params":{
+    "username":"JohnM"
+  }
+}
+```
+
+You should see an output that looks something like:
+
+```Javascript
+{
+  "result": {
+    "close": 1,
+    "correct": 2
+  }
+}
+```
+
+Ok so now the fun part, let's go back to API Gateway and create a new resource. Create a new resource set up like this:
+
+![Gateway10](gateway10.png)
+
+Then create a child resource under that new resource setup like this:
+
+![Gateway11](gateway11.png)
+
+Then setup a new POST Method under the child resource.
+
+![Gateway12](gateway12.png)
+
+Now when we click test on this method we can see that there's a new section to add path parameters. This allows us to put variables directly in the url instead of just in the JSON body. This is why the lambda pulled one variable from "params" and one from "body". We can test it out to verify its working.
+
+![Gateway13](gateway13.png)
+
+## ix. Deploying API Gateway
+
+To deploy go to "Actions" then "Deploy API".
+
+![Deploy0](deploy0.png)
+
+Then fill out the dialog like this:
+
+![Deploy1](deploy1.png)
+
+After clicking done you should see the deployed stage:
+
+![Deploy2](deploy2.png)
+
+At the top of the screen you should see an "invoke url".
+
+Using curl (or in browser via [online curl](http://onlinecurl.com/)) you can test the `FetchUsers` by going to:
+
+`aws.url.com/users`
+
+Which should produce an output like:
+
+![Deploy3](deploy3.png)
+
+# Wrapping Up
+
+We've just implemented a serverless API from scratch using AWS. Due to the nature of AWS, this system can scale up with minimal effort on our end. However, there are a ton of manual steps to get everything up and running. We also aren't using version control to track changes to our lambdas, which can be dangerous. In the next entry in this series we'll go over how to use [AWS Cloud Formation](aws.amazon.com/cloudformation) to automate the deploy process for us. 
